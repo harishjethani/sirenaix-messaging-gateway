@@ -18,7 +18,7 @@ func TestStartAtomicallyReplacesStalePairingRowAfterRestart(t *testing.T) {
 	repository.pairingStarted = map[string]time.Time{"tenant-a/connection-1": time.Date(2026, 8, 23, 10, 0, 0, 0, time.UTC)}
 	repository.pairingAttempt = map[string]string{"tenant-a/connection-1": "old-attempt"}
 
-	attempt, err := service.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	attempt, err := service.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("Start after restart: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestActiveExpiryDisposesSecretsWithoutAnotherRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	if _, err = service.Start(context.Background(), "tenant-a", "connection-1", validCookies()); err != nil {
+	if _, err = service.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()}); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	select {
@@ -56,7 +56,7 @@ func TestCleanupFailureDisposesSecretsAndRetriesDurableRestore(t *testing.T) {
 	service, provider, repository := newServiceFixture(t)
 	provider.devices = []Device{{ID: "a", Label: "A"}, {ID: "b", Label: "B"}}
 	repository.put(connection("tenant-a", "connection-1", domain.ConnectionStateReauthorizationRequired))
-	attempt, err := service.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	attempt, err := service.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}

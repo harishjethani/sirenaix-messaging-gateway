@@ -788,7 +788,7 @@ components:
         cookies:
           type: object
           additionalProperties: false
-          required: [SID, HSID, OSID, SSID, APISID, SAPISID]
+          required: [SID, HSID, OSID, SSID, APISID, SAPISID, __Secure-1PSIDTS]
           properties:
             SID: {type: string, minLength: 1}
             HSID: {type: string, minLength: 1}
@@ -796,6 +796,13 @@ components:
             SSID: {type: string, minLength: 1}
             APISID: {type: string, minLength: 1}
             SAPISID: {type: string, minLength: 1}
+            __Secure-1PSIDTS: {type: string, minLength: 1}
+        google_authuser:
+          type: integer
+          minimum: 0
+          maximum: 9
+          default: 0
+          description: Browser account index (the N in messages.google.com/web/u/N) when the browser is signed into several Google accounts.
     PairingDeviceSelectionRequest:
       type: object
       additionalProperties: false

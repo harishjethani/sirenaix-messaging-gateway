@@ -44,5 +44,5 @@ func TestConcurrentLibGMCookieRotationAndSessionSnapshot(t *testing.T) {
 }
 
 func raceTestCookies(sid string) map[string]string {
-	return map[string]string{"SID": sid, "HSID": "2", "OSID": "3", "SSID": "4", "APISID": "5", "SAPISID": "6"}
+	return map[string]string{"SID": sid, "HSID": "2", "OSID": "3", "SSID": "4", "APISID": "5", "SAPISID": "6", "__Secure-1PSIDTS": "7"}
 }

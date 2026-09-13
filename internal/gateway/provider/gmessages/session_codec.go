@@ -29,7 +29,9 @@ var (
 	ErrInvalidCookies     = pairing.ErrInvalidCookieBundle
 )
 
-var requiredGoogleCookies = [...]string{"SID", "HSID", "OSID", "SSID", "APISID", "SAPISID"}
+// requiredGoogleCookies is the minimal web session Google accepts for SignInGaia;
+// without the rotating __Secure-1PSIDTS cookie the request is rejected with 401.
+var requiredGoogleCookies = [...]string{"SID", "HSID", "OSID", "SSID", "APISID", "SAPISID", "__Secure-1PSIDTS"}
 
 type sessionWire struct {
 	Version int             `json:"version"`
@@ -105,7 +107,7 @@ func validSession(auth *libgm.AuthData, push *libgm.PushKeys) bool {
 		len(auth.TachyonAuthToken) == 0 || len(auth.TachyonAuthToken) > maxSessionFieldSize || auth.TachyonExpiry.IsZero() || auth.TachyonTTL <= 0 ||
 		auth.SessionID.String() == "00000000-0000-0000-0000-000000000000" || auth.DestRegID.String() == "00000000-0000-0000-0000-000000000000" ||
 		auth.PairingID.String() == "00000000-0000-0000-0000-000000000000" || !validFinishedSessionCookies(auth.Cookies) ||
-		len(auth.WebEncryptionKey) > maxSessionFieldSize {
+		len(auth.WebEncryptionKey) > maxSessionFieldSize || !pairing.ValidGoogleAuthUser(auth.GoogleAuthUser) {
 		return false
 	}
 	if push == nil {

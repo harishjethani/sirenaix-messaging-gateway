@@ -83,6 +83,7 @@ func (api *handler) startPairing(response http.ResponseWriter, request *http.Req
 	}
 	var body struct {
 		Cookies          map[string]string `json:"cookies,omitempty"`
+		GoogleAuthUser   *int              `json:"google_authuser,omitempty"`
 		PairingID        string            `json:"pairing_id,omitempty"`
 		SelectedDeviceID string            `json:"selected_device_id,omitempty"`
 	}
@@ -93,8 +94,16 @@ func (api *handler) startPairing(response http.ResponseWriter, request *http.Req
 	var attempt pairing.Attempt
 	var err error
 	if body.Cookies != nil && body.PairingID == "" && body.SelectedDeviceID == "" {
-		attempt, err = api.pairing.Start(request.Context(), principal.TenantID, connectionID, body.Cookies)
-	} else if body.Cookies == nil && body.PairingID != "" && body.SelectedDeviceID != "" {
+		credentials := pairing.Credentials{Cookies: body.Cookies}
+		if body.GoogleAuthUser != nil {
+			if !pairing.ValidGoogleAuthUser(*body.GoogleAuthUser) {
+				writeInvalidRequest(response)
+				return
+			}
+			credentials.GoogleAuthUser = *body.GoogleAuthUser
+		}
+		attempt, err = api.pairing.Start(request.Context(), principal.TenantID, connectionID, credentials)
+	} else if body.Cookies == nil && body.GoogleAuthUser == nil && body.PairingID != "" && body.SelectedDeviceID != "" {
 		if !pairing.ValidPairingID(body.PairingID) || !pairing.ValidDeviceID(body.SelectedDeviceID) {
 			writeInvalidRequest(response)
 			return

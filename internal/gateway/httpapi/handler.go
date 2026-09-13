@@ -42,7 +42,7 @@ type Store interface {
 }
 
 type ConnectionPairer interface {
-	Start(ctx context.Context, tenantID domain.TenantID, connectionID domain.ConnectionID, cookies map[string]string) (pairing.Attempt, error)
+	Start(ctx context.Context, tenantID domain.TenantID, connectionID domain.ConnectionID, credentials pairing.Credentials) (pairing.Attempt, error)
 	SelectDevice(ctx context.Context, tenantID domain.TenantID, connectionID domain.ConnectionID, pairingID, deviceID string) (pairing.Attempt, error)
 	Complete(ctx context.Context, tenantID domain.TenantID, connectionID domain.ConnectionID, pairingID string) (pairing.Attempt, error)
 	Cancel(ctx context.Context, tenantID domain.TenantID, connectionID domain.ConnectionID, pairingID string) error

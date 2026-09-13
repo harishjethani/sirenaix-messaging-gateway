@@ -18,9 +18,41 @@ func TestPairingProviderValidatesCookiesBeforeClientCreation(t *testing.T) {
 		created++
 		return &fakeGaiaClient{}
 	})
-	_, _, err := provider.Discover(context.Background(), map[string]string{"SID": "private-cookie"})
+	_, _, err := provider.Discover(context.Background(), pairing.Credentials{Cookies: map[string]string{"SID": "private-cookie"}})
 	if !errors.Is(err, ErrInvalidCookies) || created != 0 || strings.Contains(err.Error(), "private-cookie") {
 		t.Fatalf("Discover error=%v created=%d", err, created)
+	}
+}
+
+// The account index must reach AuthData before the client is created, because
+// FetchConfig and SignInGaia are the first cookie-authenticated requests.
+func TestPairingProviderAppliesGoogleAuthUserBeforeClientCreation(t *testing.T) {
+	observed := -1
+	client := &fakeGaiaClient{auth: validSessionAuth()}
+	provider := newPairingProvider(func(auth *libgm.AuthData, _ zerolog.Logger) gaiaClient {
+		snapshot := auth.Snapshot()
+		observed = snapshot.GoogleAuthUser
+		snapshot.ClearSecrets()
+		return client
+	})
+	handle, _, err := provider.Discover(context.Background(), pairing.Credentials{Cookies: validCookieBundle(), GoogleAuthUser: 1})
+	if err != nil || observed != 1 {
+		t.Fatalf("Discover error=%v observed GoogleAuthUser=%d", err, observed)
+	}
+	provider.Dispose(context.Background(), handle, false)
+
+	created := 0
+	rejecting := newPairingProvider(func(*libgm.AuthData, zerolog.Logger) gaiaClient {
+		created++
+		return client
+	})
+	for _, index := range []int{-1, 10} {
+		if _, _, err := rejecting.Discover(context.Background(), pairing.Credentials{Cookies: validCookieBundle(), GoogleAuthUser: index}); !errors.Is(err, ErrInvalidCookies) {
+			t.Fatalf("Discover GoogleAuthUser=%d error=%v", index, err)
+		}
+	}
+	if created != 0 {
+		t.Fatalf("out-of-range account index created %d clients", created)
 	}
 }
 
@@ -30,7 +62,7 @@ func TestPairingProviderForwardsExplicitDiscoveryChoiceAndEncodesCompletion(t *t
 		auth:    validSessionAuth(),
 	}
 	provider := newPairingProvider(func(*libgm.AuthData, zerolog.Logger) gaiaClient { return client })
-	handle, devices, err := provider.Discover(context.Background(), validCookieBundle())
+	handle, devices, err := provider.Discover(context.Background(), pairing.Credentials{Cookies: validCookieBundle()})
 	if err != nil || len(devices) != 2 {
 		t.Fatalf("Discover = %#v, %v", devices, err)
 	}
@@ -58,7 +90,7 @@ func TestPairingApprovalPollOutlivesRequestAndDisposeCancelsAttempt(t *testing.T
 		auth:    validSessionAuth(),
 	}
 	provider := newPairingProvider(func(*libgm.AuthData, zerolog.Logger) gaiaClient { return client })
-	handle, _, err := provider.Discover(context.Background(), validCookieBundle())
+	handle, _, err := provider.Discover(context.Background(), pairing.Credentials{Cookies: validCookieBundle()})
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
@@ -89,7 +121,7 @@ func TestPairingCancellationStopsAttemptPollBeforeRemoteCancel(t *testing.T) {
 		auth:    validSessionAuth(),
 	}
 	provider := newPairingProvider(func(*libgm.AuthData, zerolog.Logger) gaiaClient { return client })
-	handle, _, err := provider.Discover(context.Background(), validCookieBundle())
+	handle, _, err := provider.Discover(context.Background(), pairing.Credentials{Cookies: validCookieBundle()})
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
@@ -147,5 +179,5 @@ func (client *fakeGaiaClient) ClearSessionSecrets() {
 }
 
 func validCookieBundle() map[string]string {
-	return map[string]string{"SID": "1", "HSID": "2", "OSID": "3", "SSID": "4", "APISID": "5", "SAPISID": "6"}
+	return map[string]string{"SID": "1", "HSID": "2", "OSID": "3", "SSID": "4", "APISID": "5", "SAPISID": "6", "__Secure-1PSIDTS": "7"}
 }

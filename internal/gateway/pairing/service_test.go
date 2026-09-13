@@ -19,17 +19,17 @@ func TestServiceAllowsOneActiveAttemptPerTenantConnection(t *testing.T) {
 	repository.put(connection("tenant-a", "shared", domain.ConnectionStateUnpaired))
 	repository.put(connection("tenant-b", "shared", domain.ConnectionStateUnpaired))
 
-	first, err := service.Start(context.Background(), "tenant-a", "shared", validCookies())
+	first, err := service.Start(context.Background(), "tenant-a", "shared", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("Start first: %v", err)
 	}
 	if first.ID != "pairing-1" || first.State != StateAwaitingPhoneApproval || first.Emoji != "🦊" {
 		t.Fatalf("first attempt = %#v", first)
 	}
-	if _, err := service.Start(context.Background(), "tenant-a", "shared", validCookies()); !errors.Is(err, ErrAttemptActive) {
+	if _, err := service.Start(context.Background(), "tenant-a", "shared", Credentials{Cookies: validCookies()}); !errors.Is(err, ErrAttemptActive) {
 		t.Fatalf("duplicate Start error = %v", err)
 	}
-	secondTenant, err := service.Start(context.Background(), "tenant-b", "shared", validCookies())
+	secondTenant, err := service.Start(context.Background(), "tenant-b", "shared", Credentials{Cookies: validCookies()})
 	if err != nil || secondTenant.ID == first.ID {
 		t.Fatalf("tenant B Start = %#v, %v", secondTenant, err)
 	}
@@ -39,7 +39,7 @@ func TestServicePreservesSafeInvalidCookieClassification(t *testing.T) {
 	service, provider, repository := newServiceFixture(t)
 	provider.discoverErr = ErrInvalidCookieBundle
 	repository.put(connection("tenant-a", "connection-1", domain.ConnectionStateUnpaired))
-	if _, err := service.Start(context.Background(), "tenant-a", "connection-1", map[string]string{"SID": "private-cookie"}); !errors.Is(err, ErrInvalidCookieBundle) {
+	if _, err := service.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: map[string]string{"SID": "private-cookie"}}); !errors.Is(err, ErrInvalidCookieBundle) {
 		t.Fatalf("Start error = %v", err)
 	}
 	if repository.state("tenant-a", "connection-1") != domain.ConnectionStateUnpaired {
@@ -53,7 +53,7 @@ func TestServiceRequiresExplicitDeviceSelectionBoundToAttempt(t *testing.T) {
 	repository.put(connection("tenant-a", "connection-1", domain.ConnectionStateUnpaired))
 	repository.put(connection("tenant-a", "connection-2", domain.ConnectionStateUnpaired))
 
-	first, err := service.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	first, err := service.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestServiceRequiresExplicitDeviceSelectionBoundToAttempt(t *testing.T) {
 		t.Fatalf("cross-tenant pairing ID error = %v", err)
 	}
 
-	second, err := service.Start(context.Background(), "tenant-a", "connection-2", validCookies())
+	second, err := service.Start(context.Background(), "tenant-a", "connection-2", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("Start second: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestServiceExpiryAndCancelDisposeSecretAttempts(t *testing.T) {
 	service, provider, repository := newServiceFixture(t)
 	provider.devices = []Device{{ID: "phone-a", Label: "Phone A"}, {ID: "phone-b", Label: "Phone B"}}
 	repository.put(connection("tenant-a", "connection-1", domain.ConnectionStateUnpaired))
-	attempt, err := service.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	attempt, err := service.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestServiceExpiryAndCancelDisposeSecretAttempts(t *testing.T) {
 		t.Fatalf("cancel replay error = %v", err)
 	}
 
-	attempt, err = service.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	attempt, err = service.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("restart: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestServiceSavesEncryptedSessionBeforeConnectedAndRetriesPersistence(t *tes
 	provider.devices = []Device{{ID: "phone-a", Label: "Phone A"}}
 	provider.completed = CompletedSession{Plaintext: []byte("finished-private-session"), DeviceFingerprint: make([]byte, 32)}
 	repository.put(connection("tenant-a", "connection-1", domain.ConnectionStateUnpaired))
-	attempt, err := service.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	attempt, err := service.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestReauthorizationReplacementCommitsAtomically(t *testing.T) {
 	repository.put(connection("tenant-a", "connection-1", domain.ConnectionStateReauthorizationRequired))
 	repository.saved = session.Envelope{Version: 1, Provider: "gmessages", Ciphertext: []byte("old-ciphertext"), WrappedDEK: []byte{1}, Nonce: []byte{2}, KeyID: "old", KeyVersion: 1}
 
-	attempt, err := service.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	attempt, err := service.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("Start reauthorization: %v", err)
 	}
@@ -217,7 +217,7 @@ func newServiceFixture(t *testing.T) (*Service, *fakeProvider, *fakeRepository) 
 }
 
 func validCookies() map[string]string {
-	return map[string]string{"SID": "1", "HSID": "2", "OSID": "3", "SSID": "4", "APISID": "5", "SAPISID": "6"}
+	return map[string]string{"SID": "1", "HSID": "2", "OSID": "3", "SSID": "4", "APISID": "5", "SAPISID": "6", "__Secure-1PSIDTS": "7"}
 }
 
 func connection(tenant, id string, state domain.ConnectionState) domain.Connection {
@@ -231,13 +231,15 @@ type fakeProvider struct {
 	completed                 CompletedSession
 	discoverErr               error
 	discoverCalls             int
+	lastCredentials           Credentials
 	startCalls, completeCalls int
 	cancelCalls, releaseCalls int
 }
 
 func (provider *fakeProvider) Name() string { return provider.name }
-func (provider *fakeProvider) Discover(_ context.Context, cookies map[string]string) (any, []Device, error) {
+func (provider *fakeProvider) Discover(_ context.Context, credentials Credentials) (any, []Device, error) {
 	provider.discoverCalls++
+	provider.lastCredentials = credentials
 	return &struct{}{}, append([]Device(nil), provider.devices...), provider.discoverErr
 }
 func (provider *fakeProvider) StartApproval(_ context.Context, _ any, deviceID string) (string, error) {
@@ -429,4 +431,16 @@ func (*testWrapper) UnwrapKey(_ context.Context, wrapped session.WrappedKey) ([]
 		return nil, errors.New("invalid")
 	}
 	return append([]byte(nil), wrapped.Ciphertext[1:]...), nil
+}
+
+func TestServiceForwardsGoogleAccountIndexToProvider(t *testing.T) {
+	service, provider, repository := newServiceFixture(t)
+	provider.devices = []Device{{ID: "phone-a", Label: "Phone A"}}
+	repository.put(connection("tenant-a", "connection-1", domain.ConnectionStateUnpaired))
+	if _, err := service.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies(), GoogleAuthUser: 1}); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	if provider.lastCredentials.GoogleAuthUser != 1 || provider.lastCredentials.Cookies["SAPISID"] != "6" {
+		t.Fatalf("provider credentials = %+v", provider.lastCredentials)
+	}
 }

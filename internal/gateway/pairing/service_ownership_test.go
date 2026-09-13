@@ -20,11 +20,11 @@ func TestSecondServiceCannotStealFreshDurablePairingAttempt(t *testing.T) {
 	first := newOwnershipService(t, repository, firstProvider, func() time.Time { return now }, "attempt-first")
 	second := newOwnershipService(t, repository, secondProvider, func() time.Time { return now.Add(12 * time.Hour) }, "attempt-second")
 
-	started, err := first.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	started, err := first.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("first Start: %v", err)
 	}
-	if _, err = second.Start(context.Background(), "tenant-a", "connection-1", validCookies()); !errors.Is(err, ErrAttemptActive) {
+	if _, err = second.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()}); !errors.Is(err, ErrAttemptActive) {
 		t.Fatalf("second Start = %v, want ErrAttemptActive", err)
 	}
 	if owner := repository.owner("tenant-a", "connection-1"); owner != started.ID {
@@ -45,12 +45,12 @@ func TestStaleAttemptCanBeAtomicallyReplacedAndOldCleanupIsFenced(t *testing.T) 
 	first := newOwnershipService(t, repository, firstProvider, func() time.Time { return now }, "attempt-first")
 	second := newOwnershipService(t, repository, secondProvider, func() time.Time { return now.Add(6 * time.Minute) }, "attempt-second")
 
-	oldAttempt, err := first.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	oldAttempt, err := first.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("first Start: %v", err)
 	}
 	repository.databaseNow = now.Add(6 * time.Minute)
-	newAttempt, err := second.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	newAttempt, err := second.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("stale replacement Start: %v", err)
 	}
@@ -81,12 +81,12 @@ func TestStaleAttemptLateCompletionCannotCommitOverNewOwner(t *testing.T) {
 	first := newOwnershipService(t, repository, firstProvider, func() time.Time { return now }, "attempt-first")
 	second := newOwnershipService(t, repository, secondProvider, func() time.Time { return now.Add(6 * time.Minute) }, "attempt-second")
 
-	oldAttempt, err := first.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	oldAttempt, err := first.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("first Start: %v", err)
 	}
 	repository.databaseNow = now.Add(6 * time.Minute)
-	newAttempt, err := second.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	newAttempt, err := second.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("stale replacement Start: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestGlobalReconciliationUsesRepositoryTimeAndFencesOldCleanup(t *testing.T)
 	first := newOwnershipService(t, repository, firstProvider, func() time.Time { return now }, "attempt-first")
 	second := newOwnershipService(t, repository, secondProvider, func() time.Time { return now.Add(30 * time.Second) }, "attempt-second")
 
-	oldAttempt, err := first.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	oldAttempt, err := first.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("first Start: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestGlobalReconciliationUsesRepositoryTimeAndFencesOldCleanup(t *testing.T)
 	if count, err := second.ReconcileStalePairings(context.Background(), "tenant-a"); err != nil || count != 1 {
 		t.Fatalf("expired reconciliation = %d, %v", count, err)
 	}
-	newAttempt, err := second.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	newAttempt, err := second.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("Start after reconciliation: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestGlobalReconciliationFencesOldLateCompletion(t *testing.T) {
 	first := newOwnershipService(t, repository, firstProvider, func() time.Time { return now }, "attempt-first")
 	second := newOwnershipService(t, repository, secondProvider, func() time.Time { return now.Add(30 * time.Second) }, "attempt-second")
 
-	oldAttempt, err := first.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	oldAttempt, err := first.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("first Start: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestGlobalReconciliationFencesOldLateCompletion(t *testing.T) {
 	if count, err := second.ReconcileStalePairings(context.Background(), "tenant-a"); err != nil || count != 1 {
 		t.Fatalf("expired reconciliation = %d, %v", count, err)
 	}
-	newAttempt, err := second.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	newAttempt, err := second.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("Start after reconciliation: %v", err)
 	}

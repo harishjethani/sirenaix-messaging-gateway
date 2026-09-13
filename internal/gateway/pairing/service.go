@@ -86,9 +86,25 @@ type CompletedSession struct {
 	DeviceFingerprint []byte
 }
 
+// MaxGoogleAuthUser bounds the browser account index (/u/N) accepted for pairing.
+const MaxGoogleAuthUser = 9
+
+// Credentials carries the operator-supplied Google web session used to start pairing.
+type Credentials struct {
+	Cookies map[string]string
+	// GoogleAuthUser is the account index of the Messages account in a browser
+	// signed into several Google accounts (the N in /u/N); 0 is the default account.
+	GoogleAuthUser int
+}
+
+// ValidGoogleAuthUser reports whether index is an accepted browser account index.
+func ValidGoogleAuthUser(index int) bool {
+	return index >= 0 && index <= MaxGoogleAuthUser
+}
+
 type Provider interface {
 	Name() string
-	Discover(ctx context.Context, cookies map[string]string) (handle any, devices []Device, err error)
+	Discover(ctx context.Context, credentials Credentials) (handle any, devices []Device, err error)
 	StartApproval(ctx context.Context, handle any, deviceID string) (emoji string, err error)
 	Complete(ctx context.Context, handle any) (CompletedSession, error)
 	Dispose(ctx context.Context, handle any, cancel bool)
@@ -194,7 +210,7 @@ func NewService(dependencies Dependencies) (*Service, error) {
 	}, nil
 }
 
-func (service *Service) Start(ctx context.Context, tenantID domain.TenantID, connectionID domain.ConnectionID, cookies map[string]string) (Attempt, error) {
+func (service *Service) Start(ctx context.Context, tenantID domain.TenantID, connectionID domain.ConnectionID, credentials Credentials) (Attempt, error) {
 	if tenantID == "" || connectionID == "" {
 		return Attempt{}, ErrAttemptNotFound
 	}
@@ -263,7 +279,9 @@ func (service *Service) Start(ctx context.Context, tenantID domain.TenantID, con
 	service.scheduleExpiryLocked(active, active.ExpiresAt.Sub(service.now()))
 	active.mu.Unlock()
 
-	handle, devices, err := service.provider.Discover(ctx, cloneCookies(cookies))
+	handle, devices, err := service.provider.Discover(ctx, Credentials{
+		Cookies: cloneCookies(credentials.Cookies), GoogleAuthUser: credentials.GoogleAuthUser,
+	})
 	if err != nil {
 		active.mu.Lock()
 		active.handle = handle

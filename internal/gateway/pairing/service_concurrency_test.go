@@ -15,7 +15,7 @@ func TestSelectDeviceReservationExcludesCancel(t *testing.T) {
 	provider := newBarrierProvider([]Device{{ID: "a", Label: "A"}, {ID: "b", Label: "B"}})
 	service.provider = provider
 	repository.put(connection("tenant-a", "connection-1", domain.ConnectionStateUnpaired))
-	attempt, err := service.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	attempt, err := service.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestCompleteReservationAllowsOnlyOneProviderCall(t *testing.T) {
 	provider.completed = CompletedSession{Plaintext: []byte("finished-private-session"), DeviceFingerprint: make([]byte, 32)}
 	service.provider = provider
 	repository.put(connection("tenant-a", "connection-1", domain.ConnectionStateUnpaired))
-	attempt, err := service.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	attempt, err := service.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestCompleteReservationExcludesCancelAndCommitSurvives(t *testing.T) {
 	provider.completed = CompletedSession{Plaintext: []byte("finished-private-session"), DeviceFingerprint: make([]byte, 32)}
 	service.provider = provider
 	repository.put(connection("tenant-a", "connection-1", domain.ConnectionStateUnpaired))
-	attempt, err := service.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	attempt, err := service.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestExpirySkipsInUseAttemptUntilOperationFinishes(t *testing.T) {
 	provider := newBarrierProvider([]Device{{ID: "a", Label: "A"}, {ID: "b", Label: "B"}})
 	service.provider = provider
 	repository.put(connection("tenant-a", "connection-1", domain.ConnectionStateUnpaired))
-	attempt, err := service.Start(context.Background(), "tenant-a", "connection-1", validCookies())
+	attempt, err := service.Start(context.Background(), "tenant-a", "connection-1", Credentials{Cookies: validCookies()})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -177,7 +177,7 @@ func newBarrierProvider(devices []Device) *barrierProvider {
 }
 
 func (*barrierProvider) Name() string { return "gmessages" }
-func (provider *barrierProvider) Discover(context.Context, map[string]string) (any, []Device, error) {
+func (provider *barrierProvider) Discover(context.Context, Credentials) (any, []Device, error) {
 	return &struct{}{}, append([]Device(nil), provider.devices...), nil
 }
 func (provider *barrierProvider) StartApproval(context.Context, any, string) (string, error) {

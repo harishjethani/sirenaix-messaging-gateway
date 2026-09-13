@@ -215,6 +215,8 @@ func TestSessionCodecRejectsStructurallyUnusableMaterial(t *testing.T) {
 		{name: "missing token", mutate: func(auth *libgm.AuthData, _ *libgm.PushKeys) { auth.TachyonAuthToken = nil }},
 		{name: "missing registration ID", mutate: func(auth *libgm.AuthData, _ *libgm.PushKeys) { auth.DestRegID = uuid.Nil }},
 		{name: "missing cookies", mutate: func(auth *libgm.AuthData, _ *libgm.PushKeys) { auth.Cookies = nil }},
+		{name: "negative google account index", mutate: func(auth *libgm.AuthData, _ *libgm.PushKeys) { auth.GoogleAuthUser = -1 }},
+		{name: "google account index out of range", mutate: func(auth *libgm.AuthData, _ *libgm.PushKeys) { auth.GoogleAuthUser = 10 }},
 		{name: "short push public key", mutate: func(_ *libgm.AuthData, push *libgm.PushKeys) { push.P256DH = make([]byte, 64) }},
 		{name: "short push auth", mutate: func(_ *libgm.AuthData, push *libgm.PushKeys) { push.Auth = make([]byte, 15) }},
 	}
@@ -305,7 +307,32 @@ func TestSessionSnapshotSynchronizesEveryMutableMaterialClass(t *testing.T) {
 }
 
 func validCookieSet() map[string]string {
-	return map[string]string{"SID": "one", "HSID": "two", "OSID": "three", "SSID": "four", "APISID": "five", "SAPISID": "six"}
+	return map[string]string{"SID": "one", "HSID": "two", "OSID": "three", "SSID": "four", "APISID": "five", "SAPISID": "six", "__Secure-1PSIDTS": "seven"}
+}
+
+func TestSessionCodecPersistsGoogleAuthUserAndDefaultsLegacySessions(t *testing.T) {
+	auth := validSessionAuth()
+	auth.SetGoogleAuthUser(1)
+	encoded, err := EncodeSession(auth, nil)
+	if err != nil {
+		t.Fatalf("EncodeSession: %v", err)
+	}
+	restored, _, err := DecodeSession(encoded)
+	if err != nil || restored.GoogleAuthUser != 1 {
+		t.Fatalf("DecodeSession GoogleAuthUser = %v, err = %v", restored, err)
+	}
+	legacy := validSessionAuth()
+	legacyEncoded, err := EncodeSession(legacy, nil)
+	if err != nil {
+		t.Fatalf("EncodeSession legacy: %v", err)
+	}
+	if bytes.Contains(legacyEncoded, []byte("google_authuser")) {
+		t.Fatal("default account index changed the persisted session encoding")
+	}
+	restoredLegacy, _, err := DecodeSession(legacyEncoded)
+	if err != nil || restoredLegacy.GoogleAuthUser != 0 {
+		t.Fatalf("legacy DecodeSession GoogleAuthUser = %v, err = %v", restoredLegacy, err)
+	}
 }
 
 func validSessionAuth() *libgm.AuthData {
@@ -327,15 +354,17 @@ func TestDecodeSessionRejectsMalformedDataWithoutEchoingIt(t *testing.T) {
 
 func TestCookieValidationRequiresExactNonEmptySet(t *testing.T) {
 	valid := map[string]string{
-		"SID": "one", "HSID": "two", "OSID": "three", "SSID": "four", "APISID": "five", "SAPISID": "six",
+		"SID": "one", "HSID": "two", "OSID": "three", "SSID": "four", "APISID": "five", "SAPISID": "six", "__Secure-1PSIDTS": "seven",
 	}
 	if err := ValidateCookies(valid); err != nil {
 		t.Fatalf("ValidateCookies(valid): %v", err)
 	}
 	tests := []map[string]string{
 		{"SID": "one"},
-		{"SID": "one", "HSID": "two", "OSID": "three", "SSID": "four", "APISID": "five", "SAPISID": ""},
-		{"SID": "one", "HSID": "two", "OSID": "three", "SSID": "four", "APISID": "five", "SAPISID": "six", "ACCOUNT": "ambiguous-secret"},
+		{"SID": "one", "HSID": "two", "OSID": "three", "SSID": "four", "APISID": "five", "SAPISID": "", "__Secure-1PSIDTS": "seven"},
+		// Google rejects SignInGaia without the rotating __Secure-1PSIDTS cookie.
+		{"SID": "one", "HSID": "two", "OSID": "three", "SSID": "four", "APISID": "five", "SAPISID": "six"},
+		{"SID": "one", "HSID": "two", "OSID": "three", "SSID": "four", "APISID": "five", "SAPISID": "six", "__Secure-1PSIDTS": "seven", "ACCOUNT": "ambiguous-secret"},
 	}
 	for _, cookies := range tests {
 		err := ValidateCookies(cookies)

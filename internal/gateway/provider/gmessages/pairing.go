@@ -50,12 +50,17 @@ func newPairingProvider(factory gaiaClientFactory) *PairingProvider {
 
 func (*PairingProvider) Name() string { return "gmessages" }
 
-func (provider *PairingProvider) Discover(ctx context.Context, cookies map[string]string) (any, []pairing.Device, error) {
-	if err := ValidateCookies(cookies); err != nil {
+func (provider *PairingProvider) Discover(ctx context.Context, credentials pairing.Credentials) (any, []pairing.Device, error) {
+	if err := ValidateCookies(credentials.Cookies); err != nil {
 		return nil, nil, err
 	}
+	if !pairing.ValidGoogleAuthUser(credentials.GoogleAuthUser) {
+		return nil, nil, ErrInvalidCookies
+	}
 	auth := libgm.NewAuthData()
-	auth.SetCookies(cookies)
+	auth.SetCookies(credentials.Cookies)
+	// Must be set before the client's first cookie-authenticated request (FetchConfig).
+	auth.SetGoogleAuthUser(credentials.GoogleAuthUser)
 	client := provider.newClient(auth, zerolog.Nop())
 	if client == nil {
 		auth.ClearSecrets()

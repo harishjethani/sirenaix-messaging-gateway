@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,6 +46,10 @@ type AuthData struct {
 	PairingID uuid.UUID `json:"pairing_id,omitempty"`
 
 	Cookies map[string]string `json:"cookies,omitempty"`
+	// GoogleAuthUser is the browser account index (/u/N) of the Google account the
+	// cookies should authenticate as when the cookie jar holds several accounts.
+	// Zero is the default account and sends no X-Goog-AuthUser header.
+	GoogleAuthUser int `json:"google_authuser,omitempty"`
 
 	// sessionLock is the single synchronization boundary for every durable
 	// authentication field and, through Client methods, push keys. It must
@@ -58,6 +63,14 @@ func (*AuthData) GoString() string { return "libgm.AuthData{redacted}" }
 func (ad *AuthData) SetCookies(cookies map[string]string) {
 	ad.sessionLock.Lock()
 	ad.Cookies = cloneStringMap(cookies)
+	ad.sessionLock.Unlock()
+}
+
+// SetGoogleAuthUser selects which signed-in Google account (the N in /u/N) the
+// cookies authenticate as.
+func (ad *AuthData) SetGoogleAuthUser(index int) {
+	ad.sessionLock.Lock()
+	ad.GoogleAuthUser = index
 	ad.sessionLock.Unlock()
 }
 
@@ -158,7 +171,7 @@ func (ad *AuthData) snapshotLocked() *AuthData {
 		TachyonExpiry:    ad.TachyonExpiry, TachyonTTL: ad.TachyonTTL,
 		WebEncryptionKey: append([]byte(nil), ad.WebEncryptionKey...),
 		SessionID:        ad.SessionID, DestRegID: ad.DestRegID, PairingID: ad.PairingID,
-		Cookies: cloneStringMap(ad.Cookies),
+		Cookies: cloneStringMap(ad.Cookies), GoogleAuthUser: ad.GoogleAuthUser,
 	}
 	if ad.RequestCrypto != nil {
 		snapshot.RequestCrypto = &crypto.AESCTRHelper{
@@ -201,7 +214,7 @@ func (ad *AuthData) clearSecretsLocked() {
 		zeroBytes(ad.RefreshKey.Y)
 	}
 	clear(ad.Cookies)
-	ad.Cookies = nil
+	ad.Cookies, ad.GoogleAuthUser = nil, 0
 	ad.RequestCrypto, ad.RefreshKey, ad.Browser, ad.Mobile = nil, nil, nil, nil
 	ad.TachyonAuthToken, ad.WebEncryptionKey = nil, nil
 	ad.TachyonExpiry, ad.TachyonTTL = time.Time{}, 0
@@ -256,6 +269,11 @@ func (ad *AuthData) AddCookiesToRequest(req *http.Request) {
 	sapisid, ok := ad.Cookies["SAPISID"]
 	if ok {
 		req.Header.Set("Authorization", SAPISIDHash(util.MessagesBaseURL, sapisid))
+	}
+	if ad.GoogleAuthUser > 0 {
+		// Without this, Google authenticates the cookies as the browser's default
+		// account and rejects requests for any other signed-in account with 401.
+		req.Header.Set("X-Goog-AuthUser", strconv.Itoa(ad.GoogleAuthUser))
 	}
 }
 

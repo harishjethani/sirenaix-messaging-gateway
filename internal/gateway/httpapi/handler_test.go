@@ -290,6 +290,33 @@ func TestPairingEndpointsEnforceWriteScopeTenantAndSafeErrors(t *testing.T) {
 	assertJSONContains(t, reauthorize.Body.Bytes(), `"next_action":"post_pairing_start"`)
 }
 
+func TestPairingStartForwardsBoundedGoogleAccountIndex(t *testing.T) {
+	store := newFakeStore(t)
+	pairer := &fakePairer{start: pairing.Attempt{ID: "pairing-safe", State: pairing.StateAwaitingDeviceSelection}}
+	handler, err := NewHandler(Dependencies{Store: store, Syncer: &fakeSyncer{}, Pairing: pairer, Verifier: validVerifier(), NewID: func() string { return "connection-new" }})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	cookies := `{"SID":"1","HSID":"2","OSID":"3","SSID":"4","APISID":"5","SAPISID":"6","__Secure-1PSIDTS":"7"}`
+	started := serveJSON(handler, http.MethodPost, "/v1/connections/connection-example/pairing/start", `{"cookies":`+cookies+`,"google_authuser":1}`, "valid")
+	assertStatus(t, started, http.StatusOK)
+	if pairer.lastCredentials.GoogleAuthUser != 1 || pairer.lastCredentials.Cookies["__Secure-1PSIDTS"] != "7" {
+		t.Fatalf("forwarded credentials = %+v", pairer.lastCredentials)
+	}
+	pairer.lastTenant, pairer.lastConnection = "", ""
+	for _, body := range []string{
+		`{"cookies":` + cookies + `,"google_authuser":10}`,
+		`{"cookies":` + cookies + `,"google_authuser":-1}`,
+		`{"cookies":` + cookies + `,"google_authuser":"1"}`,
+		`{"pairing_id":"pairing-safe","selected_device_id":"phone-a","google_authuser":1}`,
+	} {
+		assertError(t, serveJSON(handler, http.MethodPost, "/v1/connections/connection-example/pairing/start", body, "valid"), http.StatusBadRequest, "invalid_request", "")
+	}
+	if pairer.lastTenant != "" || pairer.lastConnection != "" {
+		t.Fatal("invalid google account index reached the pairing service")
+	}
+}
+
 func TestPairingEndpointsShareStrictPairingAndDeviceIDValidation(t *testing.T) {
 	store := newFakeStore(t)
 	pairer := &fakePairer{}
@@ -812,10 +839,11 @@ type fakePairer struct {
 	err                        error
 	lastTenant                 domain.TenantID
 	lastConnection             domain.ConnectionID
+	lastCredentials            pairing.Credentials
 }
 
-func (pairer *fakePairer) Start(_ context.Context, tenant domain.TenantID, connection domain.ConnectionID, _ map[string]string) (pairing.Attempt, error) {
-	pairer.lastTenant, pairer.lastConnection = tenant, connection
+func (pairer *fakePairer) Start(_ context.Context, tenant domain.TenantID, connection domain.ConnectionID, credentials pairing.Credentials) (pairing.Attempt, error) {
+	pairer.lastTenant, pairer.lastConnection, pairer.lastCredentials = tenant, connection, credentials
 	return pairer.start, pairer.err
 }
 func (pairer *fakePairer) SelectDevice(_ context.Context, tenant domain.TenantID, connection domain.ConnectionID, _, _ string) (pairing.Attempt, error) {
