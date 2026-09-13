@@ -5,12 +5,13 @@ package messaging
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
 
 	"go.mau.fi/mautrix-gmessages/internal/gateway/domain"
 )
@@ -234,9 +235,17 @@ func (service *Service) List(ctx context.Context, tenantID domain.TenantID, opti
 	return page, nil
 }
 
+// ProviderTemporaryID derives the outbound TmpID deterministically from the
+// tenant and message so dispatch retries reuse it. It must be a UUID: Google
+// Messages only echoes TmpID on outgoing message updates in the native-app UUID
+// format, and an empty echo breaks correlation of sent/delivered/read receipts.
 func ProviderTemporaryID(tenantID domain.TenantID, messageID domain.MessageID) string {
 	digest := sha256.Sum256([]byte(string(tenantID) + "\x00" + string(messageID)))
-	return "sx-" + base64.RawURLEncoding.EncodeToString(digest[:18])
+	var id uuid.UUID
+	copy(id[:], digest[:16])
+	id[6] = (id[6] & 0x0f) | 0x80 // RFC 9562 version 8 (custom, hash-derived)
+	id[8] = (id[8] & 0x3f) | 0x80 // RFC 9562 variant
+	return id.String()
 }
 
 func CanonicalRequestDigest(input SendInput) [32]byte {

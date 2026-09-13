@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"go.mau.fi/mautrix-gmessages/internal/gateway/domain"
 	"go.mau.fi/mautrix-gmessages/internal/gateway/messaging"
 )
@@ -159,11 +161,18 @@ func TestSubmitRejectsReservedProviderConversationBeforeStoreMutation(t *testing
 	}
 }
 
-func TestDeterministicProviderTemporaryIDIsStableAndOpaque(t *testing.T) {
+// Google Messages only echoes TmpID on outgoing message updates when it is a
+// UUID (the native-app format); any other format comes back empty and breaks
+// outbound receipt correlation.
+func TestDeterministicProviderTemporaryIDIsStableOpaqueUUID(t *testing.T) {
 	a := messaging.ProviderTemporaryID("tenant-a", "018f4ca7-52c4-7c5d-ae9b-5b7a358f9741")
 	b := messaging.ProviderTemporaryID("tenant-a", "018f4ca7-52c4-7c5d-ae9b-5b7a358f9741")
 	c := messaging.ProviderTemporaryID("tenant-b", "018f4ca7-52c4-7c5d-ae9b-5b7a358f9741")
-	if a != b || a == c || len(a) < 20 || len(a) > 64 {
+	if a != b || a == c {
 		t.Fatalf("temporary IDs a=%q b=%q c=%q", a, b, c)
+	}
+	parsed, err := uuid.Parse(a)
+	if err != nil || parsed.String() != a || parsed.Variant() != uuid.RFC4122 || parsed.Version() != 8 {
+		t.Fatalf("temporary ID %q is not a canonical RFC 9562 version 8 UUID: err=%v", a, err)
 	}
 }
