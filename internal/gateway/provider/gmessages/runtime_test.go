@@ -29,6 +29,97 @@ func (client *lineRuntimeClient) SetEventHandler(handler libgm.EventHandler) {
 	client.eventHandler = handler
 }
 
+type fullSizeRuntimeClient struct {
+	lineRuntimeClient
+	release  chan struct{}
+	mu       sync.Mutex
+	requests []string
+	ctxs     []context.Context
+	called   chan struct{}
+}
+
+func (client *fullSizeRuntimeClient) GetFullSizeImage(ctx context.Context, messageID, actionMessageID string) (*gmproto.GetFullSizeImageResponse, error) {
+	client.mu.Lock()
+	client.requests = append(client.requests, messageID+"/"+actionMessageID)
+	client.ctxs = append(client.ctxs, ctx)
+	client.mu.Unlock()
+	client.called <- struct{}{}
+	select {
+	case <-client.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &gmproto.GetFullSizeImageResponse{}, nil
+}
+
+func thumbnailOnlyMessage(messageID string, part *gmproto.MediaContent, actionMessageID string) *libgm.WrappedMessage {
+	info := &gmproto.MessageInfo{Data: &gmproto.MessageInfo_MediaContent{MediaContent: part}}
+	if actionMessageID != "" {
+		info.ActionMessageID = &actionMessageID
+	}
+	return &libgm.WrappedMessage{Message: &gmproto.Message{
+		MessageID: messageID, ConversationID: "conversation-a", MessageInfo: []*gmproto.MessageInfo{info},
+	}}
+}
+
+// Thumbnail-only RCS images must trigger exactly one asynchronous full-size request
+// per attachment; the event handler runs on the long-poll goroutine and must not block.
+func TestRuntimeRequestsFullSizeImageOnceWithoutBlockingEventHandler(t *testing.T) {
+	auth := validSessionAuth()
+	plaintext, err := EncodeSession(auth, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth.ClearSecrets()
+	client := &fullSizeRuntimeClient{release: make(chan struct{}), called: make(chan struct{}, 8)}
+	factory := &RuntimeFactory{
+		logger:    zerolog.Nop(),
+		newClient: func(*libgm.AuthData, *libgm.PushKeys, zerolog.Logger) runtimeClient { return client },
+	}
+	ctx := connectionactor.ContextWithProviderOwnership(context.Background(), connectionactor.ProviderOwnership{
+		Key: connectionactor.Key{TenantID: "tenant-a", ConnectionID: "connection-a"}, OwnerID: "owner-a", FencingToken: 9, LeaseTTL: 30 * time.Second,
+	})
+	restored, err := factory.Restore(ctx, plaintext, connectionactor.Hooks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	thumbnail := &gmproto.MediaContent{ThumbnailMediaID: "thumbnail-a", MimeType: "image/jpeg"}
+
+	returned := make(chan struct{})
+	go func() {
+		client.eventHandler(thumbnailOnlyMessage("provider-a", thumbnail, "action-a"))
+		client.eventHandler(thumbnailOnlyMessage("provider-a", thumbnail, "action-a")) // redelivery
+		client.eventHandler(thumbnailOnlyMessage("provider-b", &gmproto.MediaContent{MediaID: "media-b", ThumbnailMediaID: "thumbnail-b"}, "action-b"))
+		client.eventHandler(thumbnailOnlyMessage("provider-c", &gmproto.MediaContent{ThumbnailMediaID: "thumbnail-c"}, ""))
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("event handler blocked on the full-size request")
+	}
+	select {
+	case <-client.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("full-size image was not requested")
+	}
+	close(client.release)
+	time.Sleep(50 * time.Millisecond)
+	client.mu.Lock()
+	requests := append([]string(nil), client.requests...)
+	requestCtx := client.ctxs[0]
+	client.mu.Unlock()
+	if len(requests) != 1 || requests[0] != "provider-a/action-a" {
+		t.Fatalf("full-size requests = %q", requests)
+	}
+	if err := restored.Disconnect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if requestCtx.Err() == nil {
+		t.Fatal("full-size request context outlived the provider generation")
+	}
+}
+
 func TestRuntimeNeverPerformsPostCommitSettingsLineWrite(t *testing.T) {
 	auth := validSessionAuth()
 	plaintext, err := EncodeSession(auth, nil)

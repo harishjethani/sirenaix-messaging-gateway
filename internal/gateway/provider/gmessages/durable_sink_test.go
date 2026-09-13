@@ -915,6 +915,85 @@ func TestDurableSinkTwoImageEnvelopeProjectsBothStablePositions(t *testing.T) {
 	}
 }
 
+// Incoming RCS images first arrive thumbnail-only (no MediaID). The message must
+// still project, and the full-size update that follows must land at the same position.
+func TestDurableSinkProjectsThumbnailOnlyImageWithoutPoisonOrMediaJob(t *testing.T) {
+	store := &sinkInbox{}
+	inbox, _ := ingress.NewService(store)
+	sealer := &recordingSealer{}
+	sink, _ := NewDurableSink(DurableSinkConfig{Inbox: inbox, ACKs: &sinkACKs{owned: true}, Sealer: sealer})
+	infos := []*gmproto.MessageInfo{
+		{Data: &gmproto.MessageInfo_MediaContent{MediaContent: &gmproto.MediaContent{
+			ThumbnailMediaID: "thumbnail-first", ThumbnailDecryptionKey: []byte("thumbnail-secret"), MimeType: "image/jpeg", Size: 3,
+		}}},
+		{Data: &gmproto.MessageInfo_MediaContent{MediaContent: &gmproto.MediaContent{MediaID: "media-second", MimeType: "image/png", Size: 2}}},
+		{Data: &gmproto.MessageInfo_MessageContent{MessageContent: &gmproto.MessageContent{Content: "caption"}}},
+	}
+	updates := &gmproto.UpdateEvents{Event: &gmproto.UpdateEvents_MessageEvent{MessageEvent: &gmproto.MessageEvent{Data: []*gmproto.Message{{
+		MessageID: "provider-a", ConversationID: "conversation-a", MessageInfo: infos,
+		MessageStatus: &gmproto.MessageStatus{Status: gmproto.MessageStatusType_INCOMING_COMPLETE},
+	}}}}}
+	outcome, err := sink.PersistEnvelopeOutcome(context.Background(), durableTestOwnership(), libgm.DurableEnvelope{
+		ResponseID: "response-thumbnail", Raw: []byte("raw"),
+		Decoded: &libgm.IncomingRPCMessage{PayloadSource: libgm.PayloadSourceEncryptedData, DecryptedMessage: updates},
+	})
+	if err != nil || outcome != libgm.DurableOutcomeCommitted || store.record.Poisoned {
+		t.Fatalf("PersistEnvelopeOutcome() outcome=%v err=%v poisoned=%v", outcome, err, store.record.Poisoned)
+	}
+	if len(store.record.Projection.Messages) != 1 || store.record.Projection.Messages[0].Text != "caption" {
+		t.Fatalf("projection = %+v", store.record.Projection)
+	}
+	if len(store.record.Media) != 1 || store.record.Media[0].Position != 1 || store.record.Media[0].Locator != "gmessages:bWVkaWEtc2Vjb25k" {
+		t.Fatalf("media jobs = %+v", store.record.Media)
+	}
+	for _, sealed := range sealer.plaintext {
+		if string(sealed) == "thumbnail-secret" {
+			t.Fatal("thumbnail-only attachment key was sealed without a media job")
+		}
+	}
+}
+
+func TestDurableSinkProjectsCaptionlessThumbnailOnlyImageWithoutPoison(t *testing.T) {
+	store := &sinkInbox{}
+	inbox, _ := ingress.NewService(store)
+	sink, _ := NewDurableSink(DurableSinkConfig{Inbox: inbox, ACKs: &sinkACKs{owned: true}, Sealer: &recordingSealer{}})
+	updates := &gmproto.UpdateEvents{Event: &gmproto.UpdateEvents_MessageEvent{MessageEvent: &gmproto.MessageEvent{Data: []*gmproto.Message{{
+		MessageID: "provider-a", ConversationID: "conversation-a",
+		MessageStatus: &gmproto.MessageStatus{Status: gmproto.MessageStatusType_INCOMING_COMPLETE},
+		MessageInfo: []*gmproto.MessageInfo{
+			{Data: &gmproto.MessageInfo_MediaContent{MediaContent: &gmproto.MediaContent{ThumbnailMediaID: "thumbnail-a", MimeType: "image/jpeg", Size: 3}}},
+		},
+	}}}}}
+	outcome, err := sink.PersistEnvelopeOutcome(context.Background(), durableTestOwnership(), libgm.DurableEnvelope{
+		ResponseID: "response-captionless", Raw: []byte("raw"),
+		Decoded: &libgm.IncomingRPCMessage{PayloadSource: libgm.PayloadSourceEncryptedData, DecryptedMessage: updates},
+	})
+	if err != nil || outcome != libgm.DurableOutcomeCommitted || store.record.Poisoned {
+		t.Fatalf("PersistEnvelopeOutcome() outcome=%v err=%v poisoned=%v reason=%q", outcome, err, store.record.Poisoned, store.record.PoisonReason)
+	}
+	if len(store.record.Projection.Messages) != 1 || len(store.record.Media) != 0 {
+		t.Fatalf("projection = %+v media = %+v", store.record.Projection, store.record.Media)
+	}
+}
+
+func TestDurableSinkPoisonsOversizedThumbnailMediaID(t *testing.T) {
+	store := &sinkInbox{}
+	inbox, _ := ingress.NewService(store)
+	sink, _ := NewDurableSink(DurableSinkConfig{Inbox: inbox, ACKs: &sinkACKs{owned: true}, Sealer: &recordingSealer{}})
+	updates := &gmproto.UpdateEvents{Event: &gmproto.UpdateEvents_MessageEvent{MessageEvent: &gmproto.MessageEvent{Data: []*gmproto.Message{{
+		MessageID: "provider-a", ConversationID: "conversation-a", MessageInfo: []*gmproto.MessageInfo{
+			{Data: &gmproto.MessageInfo_MediaContent{MediaContent: &gmproto.MediaContent{ThumbnailMediaID: strings.Repeat("t", 4096), MimeType: "image/png"}}},
+		},
+	}}}}}
+	outcome, err := sink.PersistEnvelopeOutcome(context.Background(), durableTestOwnership(), libgm.DurableEnvelope{
+		ResponseID: "response-thumbnail-oversized", Raw: []byte("raw"),
+		Decoded: &libgm.IncomingRPCMessage{PayloadSource: libgm.PayloadSourceEncryptedData, DecryptedMessage: updates},
+	})
+	if err != nil || outcome != libgm.DurableOutcomePoisoned || !store.record.Poisoned {
+		t.Fatalf("PersistEnvelopeOutcome() outcome=%v err=%v poisoned=%v", outcome, err, store.record.Poisoned)
+	}
+}
+
 func TestDurableSinkProjectsTextImageTransportAndExactReceiptSemantics(t *testing.T) {
 	inboxStore := &sinkInbox{}
 	inbox, _ := ingress.NewService(inboxStore)

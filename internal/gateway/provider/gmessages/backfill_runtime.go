@@ -29,6 +29,13 @@ type gatewayBackfillProvider interface {
 	gatewayBackfillClient() gatewayBackfillClient
 }
 
+// fullSizeImageProvider asynchronously requests full-size images for thumbnail-only
+// attachments. Backfilled pages resolve a response waiter and never raise a
+// WrappedMessage event, so the worker must hand committed page messages over itself.
+type fullSizeImageProvider interface {
+	requestFullSizeImages(*gmproto.Message)
+}
+
 type BackfillCursorStore interface {
 	LoadCommittedCursor(context.Context, domain.TenantID, domain.ConnectionID, string) ([]byte, error)
 }
@@ -108,7 +115,7 @@ func (worker *ActorBackfillWorker) RunConnection(ctx context.Context, key connec
 				continue
 			}
 			processed = true
-			return worker.fetchMessagePage(operationCtx, ownership, backfillProvider.gatewayBackfillClient(), checkpoint.ID, item)
+			return worker.fetchMessagePage(operationCtx, ownership, backfillProvider, checkpoint.ID, item)
 		}
 		for _, item := range checkpoint.Items {
 			if item.State == messaging.BackfillItemPoisoned {
@@ -171,9 +178,10 @@ func (worker *ActorBackfillWorker) stageConversationPage(ctx context.Context, ow
 }
 
 func (worker *ActorBackfillWorker) fetchMessagePage(
-	ctx context.Context, ownership connectionactor.ProviderOwnership, client gatewayBackfillClient,
+	ctx context.Context, ownership connectionactor.ProviderOwnership, provider gatewayBackfillProvider,
 	checkpointID string, item messaging.BackfillItem,
 ) error {
+	client := provider.gatewayBackfillClient()
 	cursor, err := worker.loadCursor(ctx, ownership.Key, item.ConversationID)
 	if err != nil {
 		return err
@@ -197,6 +205,12 @@ func (worker *ActorBackfillWorker) fetchMessagePage(
 			ownership.Key.TenantID, ownership.Key.ConnectionID, ownership.OwnerID, ownership.FencingToken,
 			checkpointID, item.Ordinal, messaging.BackfillItemPoisoned, "invalid_provider_message_page",
 		))
+	}
+	if requester, ok := provider.(fullSizeImageProvider); ok {
+		// The page is already durably committed; requests are asynchronous and never hold the actor.
+		for _, message := range page.GetMessages() {
+			requester.requestFullSizeImages(message)
+		}
 	}
 	if page.GetCursor() != nil {
 		if _, _, err = responseBackfillCursor(nil, page.GetCursor()); err != nil {

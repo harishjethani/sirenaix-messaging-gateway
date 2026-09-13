@@ -410,6 +410,50 @@ func (provider *backfillProviderFake) gatewayBackfillClient() gatewayBackfillCli
 	return provider.client
 }
 
+type fullSizeBackfillProviderFake struct {
+	backfillProviderFake
+	requested []string
+}
+
+func (provider *fullSizeBackfillProviderFake) requestFullSizeImages(message *gmproto.Message) {
+	provider.requested = append(provider.requested, message.GetMessageID())
+}
+
+// Backfilled pages go to a response waiter and never raise a WrappedMessage event, so the
+// worker itself must hand committed page messages to the full-size image requester.
+func TestActorBackfillWorkerRequestsFullSizeImagesForCommittedPage(t *testing.T) {
+	key := connectionactor.Key{TenantID: "tenant-a", ConnectionID: "connection-a"}
+	store := &backfillCursorStoreFake{cursors: make(map[string][]byte)}
+	actionMessageID := "action-a"
+	client := &backfillClientFake{
+		listResponse: &gmproto.ListConversationsResponse{Conversations: []*gmproto.Conversation{{ConversationID: "conversation-a"}}},
+		fetch: func(string, *gmproto.Cursor) (*gmproto.ListMessagesResponse, error) {
+			return &gmproto.ListMessagesResponse{Messages: []*gmproto.Message{{
+				MessageID: "provider-thumbnail", ConversationID: "conversation-a",
+				MessageInfo: []*gmproto.MessageInfo{{ActionMessageID: &actionMessageID, Data: &gmproto.MessageInfo_MediaContent{
+					MediaContent: &gmproto.MediaContent{ThumbnailMediaID: "thumbnail-a", MimeType: "image/jpeg"},
+				}}},
+			}}}, nil
+		},
+	}
+	provider := &fullSizeBackfillProviderFake{backfillProviderFake: backfillProviderFake{client: client}}
+	worker, err := NewActorBackfillWorker(ActorBackfillWorkerConfig{
+		Executor: inlineExecutor{provider: provider}, Cursors: store, Checkpoints: store,
+		ConversationPageSize: 25, MessagePageSize: 50,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for run := 0; run < 2; run++ {
+		if processed, runErr := worker.RunConnection(context.Background(), key); runErr != nil || !processed {
+			t.Fatalf("RunConnection() #%d = (%v, %v)", run, processed, runErr)
+		}
+	}
+	if len(provider.requested) != 1 || provider.requested[0] != "provider-thumbnail" {
+		t.Fatalf("full-size requests = %q", provider.requested)
+	}
+}
+
 func TestActorBackfillWorkerUsesCommittedCursorsInsideFencedActor(t *testing.T) {
 	key := connectionactor.Key{TenantID: "tenant-a", ConnectionID: "connection-a"}
 	store := &backfillCursorStoreFake{cursors: make(map[string][]byte)}

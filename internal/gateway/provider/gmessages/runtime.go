@@ -14,6 +14,7 @@ import (
 	"go.mau.fi/mautrix-gmessages/internal/gateway/store/postgres"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm"
 	"go.mau.fi/mautrix-gmessages/pkg/libgm/events"
+	"go.mau.fi/mautrix-gmessages/pkg/libgm/gmproto"
 )
 
 type runtimeClient interface {
@@ -108,8 +109,10 @@ func (factory *RuntimeFactory) Restore(ctx context.Context, plaintext []byte, ho
 			return factory.durable.PersistEnvelopeOutcome(handlerCtx, ownership, envelope)
 		})
 	}
+	requestCtx, cancelRequests := context.WithCancel(context.Background())
 	runtime := &runtimeProvider{
 		client: client, hooks: hooks, failureNotify: make(chan struct{}, 1),
+		requestCtx: requestCtx, cancelRequests: cancelRequests, fullSizeRequested: make(map[string]struct{}),
 	}
 	if factory.durable != nil {
 		durableClient.SetDurableFailureObserver(runtime.signalFailure)
@@ -238,6 +241,15 @@ func (provider *runtimeProvider) terminalFailureOr(fallback error) error {
 	return fallback
 }
 
+// fullSizeImageRequester asks the phone to upload the full-size image for a
+// thumbnail-only attachment; the result arrives later as a message update with a MediaID.
+type fullSizeImageRequester interface {
+	GetFullSizeImage(ctx context.Context, messageID, actionMessageID string) (*gmproto.GetFullSizeImageResponse, error)
+}
+
+// maxFullSizeRequestsTracked bounds the per-generation dedupe set.
+const maxFullSizeRequestsTracked = 4096
+
 type runtimeProvider struct {
 	client        runtimeClient
 	hooks         connectionactor.Hooks
@@ -245,6 +257,11 @@ type runtimeProvider struct {
 	failure       error
 	failureNotify chan struct{}
 	clear         sync.Once
+
+	requestCtx        context.Context
+	cancelRequests    context.CancelFunc
+	fullSizeMu        sync.Mutex
+	fullSizeRequested map[string]struct{}
 }
 
 func (provider *runtimeProvider) gatewayMessagingClient() gatewayMessagingClient {
@@ -303,6 +320,9 @@ func (provider *runtimeProvider) Connect(ctx context.Context) error {
 }
 
 func (provider *runtimeProvider) Disconnect(ctx context.Context) error {
+	if provider.cancelRequests != nil {
+		provider.cancelRequests()
+	}
 	err := provider.client.DisconnectContext(ctx)
 	provider.clear.Do(provider.client.ClearSessionSecrets)
 	return err
@@ -325,10 +345,46 @@ func (provider *runtimeProvider) handleEvent(event any) {
 		// the raw provider envelope before ACK eligibility. The compatibility
 		// event intentionally has no post-commit database side effect.
 		return
+	case *libgm.WrappedMessage:
+		// The message was already committed by DurableSink; only request full-size
+		// images for thumbnail-only attachments so the provider re-delivers them with a MediaID.
+		provider.requestFullSizeImages(typed.Message)
+		return
 	default:
 		return
 	}
 	provider.recordFailure(failure)
+}
+
+// requestFullSizeImages issues one asynchronous GetFullSizeImage per thumbnail-only
+// attachment. It must not block: this handler runs on the long-poll goroutine, which is
+// also the only reader of the response.
+func (provider *runtimeProvider) requestFullSizeImages(message *gmproto.Message) {
+	requester, ok := provider.client.(fullSizeImageRequester)
+	if !ok || message == nil || provider.requestCtx == nil {
+		return
+	}
+	for _, info := range message.GetMessageInfo() {
+		media := info.GetMediaContent()
+		actionMessageID := info.GetActionMessageID()
+		if media == nil || media.GetMediaID() != "" || media.GetThumbnailMediaID() == "" || actionMessageID == "" {
+			continue
+		}
+		key := message.GetMessageID() + "\x00" + actionMessageID
+		provider.fullSizeMu.Lock()
+		if _, requested := provider.fullSizeRequested[key]; requested {
+			provider.fullSizeMu.Unlock()
+			continue
+		}
+		if len(provider.fullSizeRequested) >= maxFullSizeRequestsTracked {
+			clear(provider.fullSizeRequested)
+		}
+		provider.fullSizeRequested[key] = struct{}{}
+		provider.fullSizeMu.Unlock()
+		go func(messageID string) {
+			_, _ = requester.GetFullSizeImage(provider.requestCtx, messageID, actionMessageID)
+		}(message.GetMessageID())
+	}
 }
 
 func (provider *runtimeProvider) sessionChanged() {

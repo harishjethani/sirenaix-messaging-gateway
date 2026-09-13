@@ -491,12 +491,19 @@ func (sink *DurableSink) projectMessages(ctx context.Context, ownership connecti
 			if mediaContent == nil {
 				continue
 			}
+			position := attachmentIndex
+			attachmentIndex++
+			if mediaContent.GetMediaID() == "" {
+				// Thumbnail-only attachment: project the message without a media job. The
+				// full-size update re-delivers this message with a MediaID at the same position,
+				// so positions must not shift when an attachment is skipped.
+				continue
+			}
 			job, err := sink.mediaJob(ctx, ownership, providerMessage, mediaContent)
 			if err != nil {
 				return ingress.Projection{}, nil, err
 			}
-			job.Position = attachmentIndex
-			attachmentIndex++
+			job.Position = position
 			mediaJobs = append(mediaJobs, job)
 		}
 		providerStatus := providerMessage.GetMessageStatus().GetStatus()
@@ -567,7 +574,9 @@ func validateMessageEvent(event *gmproto.MessageEvent) error {
 			messageMedia++
 			totalMedia++
 			if messageMedia > ingress.MaxAttachmentsPerMessage || totalMedia > ingress.MaxProjectedAttachments ||
-				!boundedProviderID(media.GetMediaID(), false) || !boundedProviderMetadata(media.GetMimeType()) ||
+				// MediaID is empty for thumbnail-only RCS images until the full-size image is requested.
+				!boundedProviderID(media.GetMediaID(), true) || !boundedProviderID(media.GetThumbnailMediaID(), true) ||
+				!boundedProviderMetadata(media.GetMimeType()) ||
 				!boundedProviderMetadata(media.GetMediaName()) || media.GetSize() < 0 || media.GetSize() > ingress.MaxDeclaredMediaBytes ||
 				len(media.GetDecryptionKey()) > 4096 || len(media.GetThumbnailDecryptionKey()) > 4096 {
 				return fmt.Errorf("%w: provider media fields exceed limit", errMalformedProviderEnvelope)
